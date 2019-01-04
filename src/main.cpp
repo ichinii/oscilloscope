@@ -1,11 +1,72 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <cassert>
 #include <iostream>
 #include <chrono>
+#include <memory>
+#include <fstream>
+#include <sstream>
+#include <vector>
 
 void glfw_error_callback(int error, const char *description) {
 	std::cerr << "glfw error: " << error << " " << description << std::endl;
+}
+
+constexpr auto pi()
+{
+	return std::atan(1)*4;
+}
+
+GLuint loadShaderFromSourceCode(GLenum type, const char* sourcecode, int length)
+{
+	GLuint shaderId = glCreateShader(type);
+
+	glShaderSource(shaderId, 1, &sourcecode, &length);
+	glCompileShader(shaderId);
+
+	GLint isCompiled = 0;
+	glGetShaderiv(shaderId, GL_COMPILE_STATUS, &isCompiled);
+	if(isCompiled == GL_FALSE)
+	{
+		GLint maxLength = 0;
+		glGetShaderiv(shaderId, GL_INFO_LOG_LENGTH, &maxLength);
+
+		auto errorLog = std::make_unique<GLchar[]>(maxLength);
+		glGetShaderInfoLog(shaderId, maxLength, &maxLength, &errorLog[0]);
+
+		std::cout << "Error compiling " << std::endl
+			<< &errorLog[0] << std::endl;
+		glDeleteShader(shaderId); // Don't leak the shader.
+		return 0;
+	}
+
+	return shaderId;
+}
+
+GLuint loadShaderFromFile(GLenum type, const char* filepath)
+{
+	std::ifstream fstream;
+	fstream.open(filepath);
+
+	if (!fstream.is_open())
+	{
+		std::cout << "Unable to open file '" << filepath << "'" << std::endl;
+		return 0;
+	}
+
+	std::stringstream sstream;
+	std::string line;
+	while (std::getline(fstream, line))
+		sstream << line << '\n';
+	line = sstream.str();
+
+	GLuint shaderId = loadShaderFromSourceCode(type, line.c_str(), line.length());
+	if (!shaderId)
+		std::cout << "...with filepath '" << filepath << "'"; 
+
+	return shaderId;
 }
 
 int main(int argc, char** argv)
@@ -29,29 +90,115 @@ int main(int argc, char** argv)
 	if (GLenum err = glewInit(); err != GLEW_OK)
 		std::cerr << glewGetErrorString(err) << std::endl;
 
+	// init program
+	auto program = glCreateProgram();
+	{
+		auto vertexShader = loadShaderFromFile(GL_VERTEX_SHADER, "res/vertex.glsl");
+		auto fragmentShader = loadShaderFromFile(GL_FRAGMENT_SHADER, "res/fragment.glsl");
+		glAttachShader(program, vertexShader);
+		glAttachShader(program, fragmentShader);
+		glLinkProgram(program);
+		glDeleteShader(vertexShader);
+		glDeleteShader(fragmentShader);
+	}
+	glUseProgram(program);
+
+	// locations
+	auto mvpLocation = glGetUniformLocation(program, "mvp");
+	assert(mvpLocation != -1);
+	auto colorLocation = glGetUniformLocation(program, "color");
+	assert(colorLocation != -1);
+
+	// create info buffers
+	GLuint info_vao;
+	GLuint info_vbos[1];
+	glGenBuffers(1, info_vbos);
+	glGenVertexArrays(1, &info_vao);
+	glBindVertexArray(info_vao);
+
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, info_vbos[0]);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+	// generate info
+	glm::vec2 infoLines[] {
+		{-1,  0},
+		{ 1,  0},
+		{ 0, -1},
+		{ 0,  1},
+	};
+	glBindBuffer(GL_ARRAY_BUFFER, info_vbos[0]);
+	glBufferData(GL_ARRAY_BUFFER, sizeof infoLines, infoLines, GL_STATIC_DRAW);
+
+	// create buffers
+	GLuint vao;
+	GLuint vbos[1];
+	glGenBuffers(1, vbos);
+	glGenVertexArrays(1, &vao);
+	glBindVertexArray(vao);
+
+	glEnableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+	// unbind vao
+	glBindVertexArray(0);
+
 	// time management for main loop (max 9223372036854775808 milliseconds)
 	using namespace std::chrono_literals;
 	using clock = std::chrono::steady_clock;
 	auto startTime = clock::now();
 	auto totalDeltaTime = 0ms;
 
+	// controlls
+	float scale = 1.f;
+	glm::mat4 mvp;
+
 	// main loop
 	while (!glfwWindowShouldClose(window)) {
-		auto curTime = clock::now();
 		auto deltaTime = std::chrono::duration_cast<std::chrono::milliseconds>(
 			clock::now() - (startTime + totalDeltaTime));
 		totalDeltaTime += deltaTime;
+
+		if (glfwGetKey(window, GLFW_KEY_W))
+			scale = scale * 1.05;
+		if (glfwGetKey(window, GLFW_KEY_S))
+			scale = scale / 1.05;
 
 		int width, height;
 		glfwGetWindowSize(window, &width, &height);
 		glViewport(0, 0, width, height);
 
-		// update
-		// TODO
-
-		// render
+		// clear
 		glClear(GL_COLOR_BUFFER_BIT);
-		// TODO
+
+		// render info
+		mvp = glm::ortho<float>(-1, 1, -1, 1);
+		glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &mvp[0][0]);
+		glUniform4f(colorLocation, 0, .2f, 0, 1);
+		glBindVertexArray(info_vao);
+		glDrawArrays(GL_LINES, 0, 4);
+		glBindVertexArray(0);
+
+		// generate data
+		const std::size_t numSamples = 16;
+		glm::vec2 positions[numSamples];
+		for (std::size_t x = 0; x < numSamples; x++)
+			positions[x] = glm::vec2(
+				static_cast<float>(x) / numSamples,
+				std::sin(static_cast<float>(x) / (numSamples - 1) * pi() * 2.f));
+		glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
+		glBufferData(GL_ARRAY_BUFFER, sizeof positions, positions, GL_STATIC_DRAW);
+
+		// render data
+		mvp = glm::ortho<float>(-1 * scale, 1 * scale, -1, 1);
+		glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &mvp[0][0]);
+		glUniform4f(colorLocation, 1, 0, 0, 1);
+		glBindVertexArray(vao);
+		glDrawArrays(GL_LINE_STRIP, 0, numSamples);
+		glBindVertexArray(0);
+
+		// display
 		glfwSwapBuffers(window);
 
 		glfwPollEvents();
@@ -59,7 +206,13 @@ int main(int argc, char** argv)
 			glfwSetWindowShouldClose(window, true);
 	}
 
-	// terminate glfw
+	// terminate
+	glDeleteVertexArrays(1, &info_vao);
+	glDeleteBuffers(1, info_vbos);
+	glDeleteVertexArrays(1, &vao);
+	glDeleteBuffers(1, vbos);
+	glDeleteProgram(program);
+	glfwDestroyWindow(window);
 	glfwTerminate();
 	return 0;
 }
