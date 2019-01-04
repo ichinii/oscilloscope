@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include "ring.h"
 
 void glfw_error_callback(int error, const char *description) {
 	std::cerr << "glfw error: " << error << " " << description << std::endl;
@@ -150,9 +151,10 @@ int main(int argc, char** argv)
 	auto startTime = clock::now();
 	auto totalDeltaTime = 0ms;
 
-	// controlls
+	// variables
 	float scale = 1.f;
 	glm::mat4 mvp;
+	ring<float> data(1024);
 
 	// main loop
 	while (!glfwWindowShouldClose(window)) {
@@ -160,11 +162,22 @@ int main(int argc, char** argv)
 			clock::now() - (startTime + totalDeltaTime));
 		totalDeltaTime += deltaTime;
 
-		if (glfwGetKey(window, GLFW_KEY_W))
-			scale = scale * 1.05;
+		// generate data
+		data.push(
+			std::sin(totalDeltaTime.count() / 1000.f * pi() * 2.f) * 0.5
+			+ std::sin(totalDeltaTime.count() / 778.f * pi() * 2.f) * 0.2
+			+ std::sin(totalDeltaTime.count() / 4431.f * pi() * 2.f) * 0.3
+			+ (int(totalDeltaTime.count() / 143.f) % 2 == 0 ? 0.1 : -0.1)
+			+ (totalDeltaTime.count() % 333 - 333/2.f) / 10000.f
+		);
+
+		// handle input
 		if (glfwGetKey(window, GLFW_KEY_S))
+			scale = scale * 1.05;
+		if (glfwGetKey(window, GLFW_KEY_W))
 			scale = scale / 1.05;
 
+		// update viewport
 		int width, height;
 		glfwGetWindowSize(window, &width, &height);
 		glViewport(0, 0, width, height);
@@ -181,17 +194,18 @@ int main(int argc, char** argv)
 		glBindVertexArray(0);
 
 		// generate data
-		const std::size_t numSamples = 16;
+		const auto numSamples = data.size();
 		glm::vec2 positions[numSamples];
-		for (std::size_t x = 0; x < numSamples; x++)
-			positions[x] = glm::vec2(
-				static_cast<float>(x) / numSamples,
-				std::sin(static_cast<float>(x) / (numSamples - 1) * pi() * 2.f));
+		for (std::size_t i = 0; i < numSamples; i++) {
+			positions[i] = glm::vec2(
+				(1.f + i - numSamples) / 512.f,
+				data[i]);
+		}
 		glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
 		glBufferData(GL_ARRAY_BUFFER, sizeof positions, positions, GL_STATIC_DRAW);
 
 		// render data
-		mvp = glm::ortho<float>(-1 * scale, 1 * scale, -1, 1);
+		mvp = glm::ortho<float>(-1 * scale, 0, -1, 1);
 		glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, &mvp[0][0]);
 		glUniform4f(colorLocation, 1, 0, 0, 1);
 		glBindVertexArray(vao);
